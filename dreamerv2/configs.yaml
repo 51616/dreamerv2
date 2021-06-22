@@ -17,6 +17,8 @@ defaults:
   dataset: {batch: 50, length: 50, oversample_ends: True}
   precision: 16
   jit: True
+  color_jitter: False
+  resample_jitter: True
 
   # Agent
   log_every: 1e4

@@ -3,7 +3,8 @@ import threading
 
 import gym
 import numpy as np
-
+from skimage import color
+import random
 
 class DMC:
 
@@ -296,3 +297,86 @@ class ResetObs:
     obs = self._env.reset()
     obs['reset'] = np.array(True, np.bool)
     return obs
+
+# https://github.com/MishaLaskin/rad/blob/master/TransformLayer.py
+class ColorJitter:
+  def __init__(self, env,
+               brightness=[0.6,1.4], contrast=[0.6,1.4],
+               saturation=[0.6,1.4], hue=[-0.5,0.5], p=1, resample=True):
+    # assert key not in env.observation_space.spaces
+    # self._key = key
+    assert 'image' in env.observation_space.spaces, \
+    f'ColorJitter requires image field in the observation'
+    self._env = env
+    self.brightness = brightness
+    self.contrast = contrast
+    self.saturation = saturation
+    self.hue = hue
+    self.prob = p
+    self.resample = resample
+
+  def __getattr__(self, name):
+    return getattr(self._env, name)
+
+  def sample_hsv_noise(self):
+    self.f_br = np.random.choice(np.random.uniform(*self.brightness,size=2))
+    self.f_sat = np.random.choice(np.random.uniform(*self.saturation,size=2))
+    self.f_cont = np.random.choice(np.random.uniform(*self.contrast,size=2))
+    self.f_hue = np.random.choice(np.random.uniform(*self.hue,size=2))
+
+  def adjust_brightness(self, hsv):
+    v = hsv[:,:,2]
+    v = np.clip(v*self.f_br,0,1)
+    hsv[:,:,2] = v
+    return hsv
+
+  def adjust_hue(self, hsv):
+    h = hsv[:,:,0]
+    h += self.f_hue
+    h = h%1
+    hsv[:,:,0] = h
+    return hsv
+
+  def adjust_saturate(self, hsv):
+    s = hsv[:,:,1]
+    s = np.clip(s*self.f_sat,0,1)
+    hsv[:,:,1] = s
+    return hsv
+
+  def adjust_contrast(self, rgb):
+    means = np.mean(rgb, axis=(0,1), keepdims=True)
+    out = np.clip((rgb - means) * self.f_cont + means, 0, 1)
+    return out
+
+  def perturb(self, rgb):
+    img = rgb.astype(np.float32)/255.
+    if self.resample:
+      self.sample_hsv_noise()
+    hsv_transform_list = [color.rgb2hsv, self.adjust_brightness,
+                              self.adjust_hue, self.adjust_saturate,
+                              color.hsv2rgb]
+    rgb_transform_list = [self.adjust_contrast]
+    # Shuffle transform
+    if random.uniform(0,1) >= 0.5:
+      transform_list = rgb_transform_list + hsv_transform_list
+    else:
+      transform_list = hsv_transform_list + rgb_transform_list
+    for t in transform_list:
+      img = t(img)
+    img = (img*255).astype(np.uint8)
+    return img
+
+  def reset(self):
+    self.sample_hsv_noise()
+    obs = self._env.reset()
+    jit_img = self.perturb(obs['image'])
+    obs['image'] = jit_img
+    return obs
+
+  def step(self, action):
+    obs, reward, done, info = self._env.step(action)
+    # img = obs['image']/255.
+    jit_img = self.perturb(obs['image'])
+    # out = (out*255).astype(np.uint8)
+    obs['image'] = jit_img
+    return obs, reward, done, info
